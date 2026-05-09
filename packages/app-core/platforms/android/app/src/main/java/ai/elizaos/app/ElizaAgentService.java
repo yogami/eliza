@@ -1402,13 +1402,34 @@ public class ElizaAgentService extends Service {
      * - On AOSP / ElizaOS-branded devices (`ro.elizaos.product` set or any
      *   white-label fork's `ro.<brand>os.product`), the device IS the
      *   agent: always start.
-     * - On stock Android, only start when the user has explicitly picked
-     *   the Local runtime in the onboarding picker (mobile-runtime-mode
-     *   == "local"). Cloud and Remote modes do not need this service.
+     * - On AOSP-built APKs (BuildConfig.AOSP_BUILD == true) the user-picked
+     *   Local runtime mode also wins: the bundled bun runtime + agent
+     *   bundle + PGlite payload ship under assets/agent/ for that build
+     *   shape, so spawning the bun process is safe.
+     * - On Capacitor (store-shippable) builds the [app-thinning] doLast
+     *   hook in build.gradle strips assets/agent/, so the bun runtime
+     *   binary, the agent-bundle.js, and the PGlite payload are NOT
+     *   present in the APK. Spawning the service crashes the process with
+     *   FileNotFoundException at extractAssetsIfNeeded() and the system
+     *   restarts the service in a tight loop. Local inference on Capacitor
+     *   builds runs IN-PROCESS in the WebView via the @elizaos/capacitor-
+     *   llama plugin (see local-agent-kernel.ts on the renderer side) —
+     *   no separate bun process needed. So we hard-disable the service
+     *   here when AOSP_BUILD=false and the device isn't a branded AOSP
+     *   image.
      */
     public static boolean shouldAutoStart(Context context) {
         if (isBrandedDevice()) {
             return true;
+        }
+        if (!BuildConfig.AOSP_BUILD) {
+            // Capacitor build on stock Android: never spawn the bun-based
+            // agent service. Local inference, when the user opts in, runs
+            // in-WebView via @elizaos/capacitor-llama. Suppressing the
+            // start here also short-circuits the boot receiver (which
+            // calls shouldAutoStart) so a reboot doesn't resurrect the
+            // crash loop.
+            return false;
         }
         String mode = readRuntimeMode(context);
         return "local".equals(mode);
