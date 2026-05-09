@@ -32,9 +32,9 @@ import type {
 import { ApiError } from "./client-types";
 import { desktopHttpTransportForUrl } from "./desktop-http-transport";
 import {
-  iosInProcessAgentTransportForUrl,
-  isIosInProcessLocalAgentBase,
-} from "./ios-local-agent-transport";
+  inProcessAgentTransportForUrl,
+  isMobileInProcessLocalAgentBase,
+} from "./local-agent-transport";
 import { nativeCloudHttpTransportForUrl } from "./native-cloud-http-transport";
 import { defaultFetchTimeoutMs } from "./request-timeout";
 import { type AgentRequestTransport, fetchAgentTransport } from "./transport";
@@ -331,7 +331,7 @@ export class ElizaClient {
         const transport =
           this.requestTransport === fetchAgentTransport
             ? ((await androidNativeAgentTransportForUrl(requestUrl)) ??
-              (await iosInProcessAgentTransportForUrl(requestUrl)) ??
+              (await inProcessAgentTransportForUrl(requestUrl)) ??
               desktopHttpTransportForUrl(requestUrl) ??
               nativeCloudHttpTransportForUrl(requestUrl) ??
               this.requestTransport)
@@ -472,7 +472,7 @@ export class ElizaClient {
   // --- WebSocket ---
 
   connectWs(): void {
-    if (isIosInProcessLocalAgentBase(this.baseUrl)) {
+    if (isMobileInProcessLocalAgentBase(this.baseUrl)) {
       this.backoffMs = 500;
       this.reconnectAttempt = 0;
       this.disconnectedAt = null;

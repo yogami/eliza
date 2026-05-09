@@ -22,6 +22,9 @@ import type {
 import { AGENT_MODEL_SLOTS } from "../services/local-inference/types";
 import type { IttpAgentRequestContext } from "./ittp-agent-transport";
 
+// Originally `eliza:ios-local-agent` — kept as-is to preserve any data
+// already in iOS users' localStorage. The kernel now also serves Android
+// and any future Capacitor target; the prefix is just a key namespace.
 const STORAGE_PREFIX = "eliza:ios-local-agent";
 const CONVERSATIONS_KEY = `${STORAGE_PREFIX}:conversations:v1`;
 const ACTIVE_MODEL_KEY = `${STORAGE_PREFIX}:active-model:v1`;
@@ -457,7 +460,7 @@ async function capacitorLlamaProviderStatus(): Promise<ProviderStatus> {
     id: "capacitor-llama",
     label: "On-device llama.cpp (mobile)",
     kind: "local",
-    description: "Runs llama.cpp natively inside the iOS app.",
+    description: "Runs llama.cpp natively inside the mobile (iOS/Android) app.",
     supportedSlots: ["TEXT_SMALL", "TEXT_LARGE"],
     configureHref: null,
     enableState: {
@@ -532,9 +535,9 @@ function localWalletConfig(): Record<string, unknown> {
     pluginEvmLoaded: false,
     pluginEvmRequired: false,
     executionReady: false,
-    executionBlockedReason: "No wallet is configured for local iOS mode.",
+    executionBlockedReason: "No wallet is configured for local mobile mode.",
     evmSigningCapability: "none",
-    evmSigningReason: "No wallet is configured for local iOS mode.",
+    evmSigningReason: "No wallet is configured for local mobile mode.",
     solanaSigningAvailable: false,
     wallets: [],
   };
@@ -817,7 +820,7 @@ async function refreshWalletMarketOverview(): Promise<Record<string, unknown>> {
 }
 
 function emptyWalletMarketOverview(
-  error = "Market data is unavailable in local iOS mode.",
+  error = "Market data is unavailable in local mobile mode.",
 ): Record<string, unknown> {
   const unavailable = (
     providerId: "coingecko" | "polymarket",
@@ -1017,6 +1020,24 @@ function normalizeMobilePlatform(
   platform: "ios" | "android" | "web" | undefined,
 ): "ios" | "android" {
   return platform === "android" ? "android" : "ios";
+}
+
+/**
+ * Read the current native Capacitor platform via globalThis. Used by the
+ * /api/local-inference/device endpoint to label the in-process device with
+ * the right "ios" / "android" value. We deliberately read off globalThis
+ * (rather than importing @capacitor/core) so unit tests can mock the
+ * Capacitor surface without needing the package as a hard dep on Node.
+ *
+ * Defaults to "ios" so existing iOS callers see no behaviour change when
+ * the bridge is unavailable (test runs, web previews).
+ */
+function currentMobilePlatform(): "ios" | "android" {
+  const cap = (globalThis as Record<string, unknown>).Capacitor as
+    | { getPlatform?: () => string }
+    | undefined;
+  const value = cap?.getPlatform?.();
+  return value === "android" ? "android" : "ios";
 }
 
 function gpuBackendForMobile(
@@ -1493,16 +1514,22 @@ async function activateModel(
   }
 }
 
-export function startIosLocalAgentKernel(): void {
+export function startLocalAgentKernel(): void {
   running = true;
   startedAt = startedAt || Date.now();
 }
 
-export async function handleIosLocalAgentRequest(
+/**
+ * @deprecated Use `startLocalAgentKernel`. Renamed when the kernel was
+ * generalised to also handle Android Capacitor builds.
+ */
+export const startIosLocalAgentKernel = startLocalAgentKernel;
+
+export async function handleLocalAgentRequest(
   request: Request,
   _context: IttpAgentRequestContext = {},
 ): Promise<Response> {
-  startIosLocalAgentKernel();
+  startLocalAgentKernel();
 
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
@@ -1620,7 +1647,7 @@ export async function handleIosLocalAgentRequest(
   if (method === "POST" && pathname === "/api/wallet/refresh-cloud") {
     return json({
       ok: false,
-      warnings: ["Cloud wallet refresh is unavailable in local iOS mode."],
+      warnings: ["Cloud wallet refresh is unavailable in local mobile mode."],
     });
   }
 
@@ -1805,14 +1832,15 @@ export async function handleIosLocalAgentRequest(
   }
 
   if (method === "GET" && pathname === "/api/local-inference/device") {
+    const platform = currentMobilePlatform();
     return json({
       enabled: true,
       connected: true,
       devices: [
         {
-          id: "ios-local",
-          label: "This iPhone",
-          platform: "ios",
+          id: `${platform}-local`,
+          label: platform === "android" ? "This phone" : "This iPhone",
+          platform,
           connectedAt: startedAt,
           lastSeenAt: Date.now(),
         },
@@ -1831,7 +1859,10 @@ export async function handleIosLocalAgentRequest(
     if (method === "GET") return json({ model });
     if (method === "DELETE") {
       return json(
-        { ok: false, error: "Uninstall is not supported on iOS yet." },
+        {
+          ok: false,
+          error: "Uninstall is not supported on the mobile runtime yet.",
+        },
         400,
       );
     }
@@ -1976,3 +2007,9 @@ export async function handleIosLocalAgentRequest(
 
   return json({ error: "Not found" }, 404);
 }
+
+/**
+ * @deprecated Use `handleLocalAgentRequest`. Renamed when the kernel was
+ * generalised to also handle Android Capacitor builds.
+ */
+export const handleIosLocalAgentRequest = handleLocalAgentRequest;

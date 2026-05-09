@@ -1466,8 +1466,25 @@ public class ElizaAgentService extends Service {
         }
     }
 
-    /** Start the foreground service (safe to call repeatedly). */
+    /**
+     * Start the foreground service (safe to call repeatedly).
+     *
+     * Hard no-op on Capacitor (non-AOSP) builds when the device is not a
+     * branded AOSP image — there is no bun runtime in the APK there, and
+     * spawning the service crash-loops. The Capacitor `Agent.start()`
+     * plugin entry point, the boot receiver, and MainActivity all funnel
+     * through this method, so the early-exit is the single chokepoint.
+     */
     public static void start(Context context) {
+        if (!shouldAutoStart(context)) {
+            Log.i(
+                TAG,
+                "Skipping ElizaAgentService.start: AOSP_BUILD=" + BuildConfig.AOSP_BUILD
+                + " brandedDevice=" + isBrandedDevice()
+                + " — local inference runs in-WebView via @elizaos/capacitor-llama instead."
+            );
+            return;
+        }
         Intent intent = new Intent(context, ElizaAgentService.class);
         intent.setAction(ACTION_START);
         context.startForegroundService(intent);

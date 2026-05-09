@@ -33,6 +33,7 @@ import type {
   ModelHubSnapshot,
 } from "../services/local-inference/types";
 import { client } from "../api";
+import { inProcessAgentTransportForUrl } from "../api/local-agent-transport";
 
 const AUTO_DOWNLOAD_MARKER_KEY = "eliza.localInference.autoDownloadAttempted";
 const HEALTH_POLL_INTERVAL_MS = 2_000;
@@ -68,8 +69,20 @@ async function waitForLocalAgent(apiBase: string): Promise<boolean> {
   const url = `${apiBase.replace(/\/$/, "")}/api/health`;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, { method: "GET" });
-      if (res.ok) return true;
+      // The Capacitor in-process kernel intercepts loopback URLs in the
+      // mobile WebView (iOS always; Android Capacitor non-AOSP). Without
+      // routing through it, this raw fetch goes to a closed loopback port
+      // on Capacitor and never resolves. Defer to the kernel when one
+      // claims the URL; otherwise fall back to a plain fetch (desktop /
+      // AOSP devices that DO have a real loopback listener).
+      const transport = await inProcessAgentTransportForUrl(url);
+      if (transport) {
+        const res = await transport.request(url, { method: "GET" });
+        if (res.ok) return true;
+      } else {
+        const res = await fetch(url, { method: "GET" });
+        if (res.ok) return true;
+      }
     } catch {
       // network not ready yet; fall through to sleep
     }

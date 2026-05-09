@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleIosLocalAgentRequest } from "./ios-local-agent-kernel";
+import { handleLocalAgentRequest } from "./local-agent-kernel";
 
 async function getJson(pathname: string): Promise<unknown> {
-  const response = await handleIosLocalAgentRequest(
+  const response = await handleLocalAgentRequest(
     new Request(`http://127.0.0.1:31337${pathname}`),
   );
 
@@ -11,7 +11,7 @@ async function getJson(pathname: string): Promise<unknown> {
 }
 
 async function postJson(pathname: string, body: unknown): Promise<unknown> {
-  const response = await handleIosLocalAgentRequest(
+  const response = await handleLocalAgentRequest(
     new Request(`http://127.0.0.1:31337${pathname}`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -42,7 +42,7 @@ function stubLocalStorage(): Storage {
   } as Storage;
 }
 
-describe("handleIosLocalAgentRequest", () => {
+describe("handleLocalAgentRequest", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
