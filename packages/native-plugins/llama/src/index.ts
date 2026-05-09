@@ -21,3 +21,12 @@ export {
   type DeviceBridgeClientConfig,
   startDeviceBridgeClient,
 } from "./device-bridge-client";
+export {
+  type EnvLike,
+  type KvCacheOverride,
+  type KvCacheTypeName,
+  looksLikeBonsai,
+  readEnvKvCacheType,
+  resolveKvCacheType,
+  type WarnSink,
+} from "./kv-cache-resolver";

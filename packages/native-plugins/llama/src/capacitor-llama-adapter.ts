@@ -17,6 +17,10 @@ import type {
   LoadOptions,
   SetSpecTypeArgs,
 } from "./definitions";
+import {
+  type EnvLike,
+  resolveKvCacheType,
+} from "./kv-cache-resolver";
 
 // Dynamically imported so the adapter can be bundled into a desktop build
 // without pulling in native-only module resolution noise.
@@ -190,6 +194,60 @@ function isCapacitorNative(): boolean {
     | { isNativePlatform?: () => boolean; getPlatform?: () => string }
     | undefined;
   return Boolean(cap?.isNativePlatform?.());
+}
+
+/**
+ * Read an env-like map for `resolveKvCacheType`.
+ *
+ * The Capacitor WebView doesn't have a real `process.env` — bun-based
+ * adapters can read `process.env.ELIZA_LLAMA_CACHE_TYPE_K` directly, but
+ * the renderer cannot. We feature-detect both surfaces:
+ *
+ *   - `globalThis.process?.env` — populated by Vite's `define` rewrites
+ *     and by Node-side tests, may be undefined on iOS/Android.
+ *   - `globalThis.__ELIZA_ENV__` — opt-in escape hatch for a runtime
+ *     caller (e.g. the model picker UI, a debug overlay, or a settings
+ *     screen) to stash an env-shaped record before calling load().
+ *
+ * Both contributions are merged with the runtime override taking
+ * precedence over the build-time process.env value.
+ */
+function readResolverEnv(): EnvLike {
+  const merged: Record<string, string | undefined> = {};
+  const proc = (globalThis as { process?: { env?: EnvLike } }).process;
+  if (proc?.env) Object.assign(merged, proc.env);
+  const runtime = (globalThis as { __ELIZA_ENV__?: EnvLike }).__ELIZA_ENV__;
+  if (runtime) Object.assign(merged, runtime);
+  return merged;
+}
+
+/**
+ * The Capacitor `LoadOptions.cacheType{K,V}` fields are typed `string`
+ * (the cross-platform contract — see `definitions.ts`), but the resolver
+ * is strict: only `f16` / `tbq3_0` / `tbq4_0` round-trip. Anything else
+ * silently no-ops on the underlying plugin (stock builds) so a typo here
+ * is forgiving — but we still narrow before handing to the resolver so
+ * the resolver's typed return surfaces a stable contract to the caller.
+ */
+function sanitizeKvCacheOverride(
+  override: { k?: string; v?: string } | undefined,
+):
+  | {
+      k?: import("./kv-cache-resolver").KvCacheTypeName;
+      v?: import("./kv-cache-resolver").KvCacheTypeName;
+    }
+  | undefined {
+  if (!override) return undefined;
+  const recognised = (
+    value: string | undefined,
+  ): import("./kv-cache-resolver").KvCacheTypeName | undefined =>
+    value === "f16" || value === "tbq3_0" || value === "tbq4_0"
+      ? value
+      : undefined;
+  const k = recognised(override.k);
+  const v = recognised(override.v);
+  if (k === undefined && v === undefined) return undefined;
+  return { k, v };
 }
 
 function detectPlatform(): "ios" | "android" | "web" {
@@ -500,6 +558,26 @@ class CapacitorLlamaAdapter implements LlamaAdapter {
       this.loadedPath = null;
     }
 
+    // Run the same KV-cache type precedence chain the AOSP bun adapter uses:
+    //   1. Explicit cacheTypeK/V from LoadOptions (highest).
+    //   2. ELIZA_LLAMA_CACHE_TYPE_K / _V env vars.
+    //   3. Bonsai-by-filename auto-route → tbq4_0/tbq3_0.
+    //
+    // On iOS/Android Capacitor, `process.env` is the empty object — we
+    // additionally probe `globalThis.__ELIZA_ENV__` so a runtime caller
+    // (e.g. the local-agent kernel or the WebView model picker) can stash
+    // env-shaped overrides for the resolver without needing a Node env.
+    const env = readResolverEnv();
+    const explicitOverride =
+      options.cacheTypeK || options.cacheTypeV
+        ? { k: options.cacheTypeK, v: options.cacheTypeV }
+        : undefined;
+    const resolvedKvCache = resolveKvCacheType(
+      options.modelPath,
+      sanitizeKvCacheOverride(explicitOverride),
+      env,
+    );
+
     const speculativeSamples = options.mobileSpeculative
       ? Math.min(options.speculativeSamples ?? options.draftMax ?? 3, 4)
       : (options.speculativeSamples ?? 3);
@@ -524,8 +602,8 @@ class CapacitorLlamaAdapter implements LlamaAdapter {
         : {}),
       ...(options.draftMin ? { draft_min: options.draftMin } : {}),
       ...(options.draftMax ? { draft_max: options.draftMax } : {}),
-      ...(options.cacheTypeK ? { cache_type_k: options.cacheTypeK } : {}),
-      ...(options.cacheTypeV ? { cache_type_v: options.cacheTypeV } : {}),
+      ...(resolvedKvCache?.k ? { cache_type_k: resolvedKvCache.k } : {}),
+      ...(resolvedKvCache?.v ? { cache_type_v: resolvedKvCache.v } : {}),
       ...(options.disableThinking ? { reasoning: false } : {}),
     };
 

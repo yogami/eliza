@@ -35,6 +35,8 @@
         "../native-plugins/contacts/src/index.ts"
       ],
       "@elizaos/capacitor-phone": ["../native-plugins/phone/src/index.ts"],
+      "@elizaos/capacitor-llama": ["../native-plugins/llama/src/index.ts"],
+      "@elizaos/capacitor-llama/*": ["../native-plugins/llama/src/*"],
       "@elizaos/app-lifeops": ["../../plugins/app-lifeops/src/index.ts"],
       "@elizaos/app-lifeops/*": ["../../plugins/app-lifeops/src/*"],
       "@elizaos/app-phone": ["../../plugins/app-phone/src/index.ts"],

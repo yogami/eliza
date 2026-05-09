@@ -137,6 +137,7 @@
     "@elizaos/app-task-coordinator": "workspace:*",
     "@elizaos/app-training": "workspace:*",
     "@elizaos/capacitor-contacts": "workspace:*",
+    "@elizaos/capacitor-llama": "workspace:*",
     "@elizaos/capacitor-phone": "workspace:*",
     "@elizaos/capacitor-wifi": "workspace:*",
     "@elizaos/core": "workspace:*",

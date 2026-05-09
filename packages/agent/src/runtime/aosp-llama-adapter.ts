@@ -89,6 +89,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { logger } from "@elizaos/core";
+import {
+  type KvCacheTypeName,
+  looksLikeBonsai,
+  readEnvKvCacheType,
+  resolveKvCacheType,
+} from "@elizaos/capacitor-llama/kv-cache-resolver";
 
 /**
  * `bun:ffi` is a Bun built-in. In non-Bun bundle targets (Vitest under Node,
@@ -383,8 +389,12 @@ const GGML_TYPE_TBQ4_0 = 44;
  *
  * Exported for unit tests so we can assert mapping correctness without
  * reaching into the adapter internals.
+ *
+ * `KvCacheTypeName` itself lives in `@elizaos/capacitor-llama/kv-cache-resolver`
+ * so the AOSP bun loader and the Capacitor in-WebView loader share one
+ * canonical definition.
  */
-export type KvCacheTypeName = "f16" | "tbq3_0" | "tbq4_0";
+export type { KvCacheTypeName };
 
 export function kvCacheTypeNameToEnum(name: KvCacheTypeName): number {
   switch (name) {
@@ -404,82 +414,20 @@ export function kvCacheTypeNameToEnum(name: KvCacheTypeName): number {
   }
 }
 
-/**
- * Auto-detect when a model path indicates a Bonsai 1-bit TurboQuant build,
- * which is the only model in the curated catalog that's trained against
- * the fork's TBQ KV-cache codec. Match is intentionally loose
- * (case-insensitive substring) because users may rename downloaded GGUFs.
- *
- * The Hugging Face repo is `apothic/bonsai-8B-1bit-turboquant` and ships
- * `models/gguf/8B/Bonsai-8B.gguf`; downloads pass that filename through
- * verbatim by default, so a "Bonsai" basename match is the right hook.
- *
- * Exported for unit tests.
- */
-export function looksLikeBonsai(modelPath: string): boolean {
-  const base = modelPath.split(/[/\\]/).pop() ?? modelPath;
-  return /bonsai/i.test(base);
-}
-
-/**
- * Read a `KvCacheTypeName` from an env var, returning undefined when the var
- * is unset, blank, or not a recognised type name. Recognised values are
- * exactly `"f16"`, `"tbq3_0"`, `"tbq4_0"` (case-insensitive). An unrecognised
- * value logs a warning and returns undefined rather than throwing — env-var
- * typos shouldn't crash the loader.
- *
- * Exported for unit tests.
- */
-export function readEnvKvCacheType(
-  name: string,
-  env: NodeJS.ProcessEnv = process.env,
-): KvCacheTypeName | undefined {
-  const raw = env[name]?.trim().toLowerCase();
-  if (!raw) return undefined;
-  if (raw === "f16" || raw === "tbq3_0" || raw === "tbq4_0") {
-    return raw;
-  }
-  logger.warn(
-    `[aosp-llama] ${name}=${raw} is not a recognised KV cache type; ignoring (use f16 / tbq3_0 / tbq4_0).`,
-  );
-  return undefined;
-}
-
-/**
- * Resolve the KV-cache type to use for a given load. Precedence:
- *   1. Explicit `LoadOptions.kvCacheType.{k,v}` (highest priority).
- *   2. `ELIZA_LLAMA_CACHE_TYPE_K` / `ELIZA_LLAMA_CACHE_TYPE_V` env vars.
- *   3. Auto-detection: Bonsai-by-filename → `{ k: "tbq4_0", v: "tbq3_0" }`
- *      (matches the model card recommendation).
- *   4. Otherwise undefined — the shim leaves the cache at llama.cpp's fp16
- *      default, which is the safe choice for any non-Bonsai GGUF.
- *
- * Returns `undefined` when no override applies, so the caller can skip the
- * shim setters entirely (smaller diff to upstream behaviour, easier to
- * reason about in logs).
- *
- * Exported for unit tests.
- */
-export function resolveKvCacheType(
-  modelPath: string,
-  override: AospLlamaLoadOptions["kvCacheType"] | undefined,
-  env: NodeJS.ProcessEnv = process.env,
-): { k?: KvCacheTypeName; v?: KvCacheTypeName } | undefined {
-  const explicitK = override?.k;
-  const explicitV = override?.v;
-  const envK = readEnvKvCacheType("ELIZA_LLAMA_CACHE_TYPE_K", env);
-  const envV = readEnvKvCacheType("ELIZA_LLAMA_CACHE_TYPE_V", env);
-  // Auto-detection only kicks in when neither an explicit override nor an
-  // env override is set. Catalog blurb references this contract directly —
-  // change here = update catalog.ts blurb in the same commit.
-  const auto = looksLikeBonsai(modelPath)
-    ? { k: "tbq4_0" as const, v: "tbq3_0" as const }
-    : undefined;
-  const k = explicitK ?? envK ?? auto?.k;
-  const v = explicitV ?? envV ?? auto?.v;
-  if (k === undefined && v === undefined) return undefined;
-  return { k, v };
-}
+// `looksLikeBonsai`, `readEnvKvCacheType`, and `resolveKvCacheType` live in
+// `@elizaos/capacitor-llama/kv-cache-resolver` so the AOSP bun loader and
+// the Capacitor in-WebView loader share one canonical implementation. The
+// resolver carries the same precedence chain documented above:
+//   1. Explicit `LoadOptions.kvCacheType.{k,v}` (highest priority).
+//   2. `ELIZA_LLAMA_CACHE_TYPE_K` / `ELIZA_LLAMA_CACHE_TYPE_V` env vars.
+//   3. Auto-detection: Bonsai-by-filename → `{ k: "tbq4_0", v: "tbq3_0" }`.
+//   4. Otherwise undefined — leave llama.cpp at its fp16 default.
+//
+// Re-exported here so the existing `looksLikeBonsai` / `readEnvKvCacheType`
+// / `resolveKvCacheType` import sites continue to work. `kvCacheTypeNameToEnum`
+// stays AOSP-local because the GGML enum values are an FFI-shim concern that
+// the Capacitor adapter never touches.
+export { looksLikeBonsai, readEnvKvCacheType, resolveKvCacheType };
 
 const SERVICE_NAME = "localInferenceLoader";
 
@@ -815,6 +763,8 @@ class AospLlamaAdapter implements AospLoader {
         (args.cacheTypeK || args.cacheTypeV
           ? { k: args.cacheTypeK, v: args.cacheTypeV }
           : undefined),
+      process.env,
+      (msg) => logger.warn(msg),
     );
 
     // Materialize llama_model_params via the shim. The shim runs

@@ -19,6 +19,11 @@
       "import": "./dist/esm/index.js",
       "require": "./dist/plugin.cjs.js"
     },
+    "./kv-cache-resolver": {
+      "types": "./dist/esm/kv-cache-resolver.d.ts",
+      "import": "./dist/esm/kv-cache-resolver.js",
+      "require": "./dist/esm/kv-cache-resolver.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
