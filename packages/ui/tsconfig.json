@@ -69,6 +69,12 @@
       "@elizaos/capacitor-mobile-signals": [
         "../native-plugins/mobile-signals/src/index.ts"
       ],
+      "@elizaos/capacitor-llama": [
+        "../native-plugins/llama/src/index.ts"
+      ],
+      "@elizaos/capacitor-llama/*": [
+        "../native-plugins/llama/src/*"
+      ],
       "@elizaos/shared": ["../shared/src/index.ts"],
       "@elizaos/shared/*": ["../shared/src/*"],
       "@elizaos/skills": ["../skills/src/index.ts"],
