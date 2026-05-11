@@ -18,6 +18,7 @@ import androidx.core.app.NotificationCompat;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,6 +30,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 /**
  * Foreground service that owns the local Eliza agent process on Android.
@@ -857,6 +862,33 @@ public class ElizaAgentService extends Service {
             agentEnv.put("HOME", getFilesDir().getAbsolutePath());
             agentEnv.put("TMPDIR", getCacheDir().getAbsolutePath());
 
+            // ── Bundled-model env binding ────────────────────────────────
+            // The APK ships a default chat + embedding GGUF under
+            // `assets/agent/models/` (staged at AOSP build time by
+            // `scripts/elizaos/stage-default-models.mjs`). extractAssetsIfNeeded
+            // copies them to `<stateDir>/local-inference/models/` along with a
+            // `manifest.json` that maps each file's role (chat / embedding).
+            //
+            // The agent runtime's local-inference loader resolves the active
+            // model via three paths (see `resolveFromEnv` in
+            // `eliza/plugins/plugin-aosp-local-inference`):
+            //   1. ELIZA_LOCAL_{CHAT,EMBEDDING}_MODEL_PATH (per-slot override)
+            //   2. ELIZA_LOCAL_MODEL_PATH (single-file fallback)
+            //   3. Registry assignment (set by the in-app picker UI)
+            //
+            // Without one of those, the loader has no model to bind and
+            // generation requests error with "Sorry, I'm having a provider
+            // issue". Path 3 requires the user to walk through Settings ▸
+            // Model Settings ▸ Local Models on first launch, but the
+            // catalog's default-eligible models all live in the gated
+            // `elizaos/eliza-1-*` HF org which is not public — the picker
+            // would 401 a fresh user. Wiring path 1 directly to the bundled
+            // files means the agent has a working chat + embedding pair the
+            // moment bun starts, with zero network and zero user picker
+            // interaction. The picker (and any downloaded model) still
+            // overrides via path 3 when the user opts in.
+            applyBundledModelPaths(agentEnv);
+
             // ── No-terminal env hints for bun's stdio probe ───────────────
             // Untrusted-app SELinux policy denies `ioctl(TIOCGWINSZ)` on
             // both app_data_file and the Java-pipe fifo with `permissive=0`.
@@ -1198,6 +1230,77 @@ public class ElizaAgentService extends Service {
             return value instanceof Long ? (Long) value : -1L;
         } catch (ReflectiveOperationException | UnsupportedOperationException ignored) {
             return -1L;
+        }
+    }
+
+    /**
+     * Read `<stateDir>/local-inference/models/manifest.json` (written by
+     * `extractAssetsIfNeeded` from the APK assets) and apply the discovered
+     * chat + embedding GGUF paths as `ELIZA_LOCAL_{CHAT,EMBEDDING}_MODEL_PATH`
+     * env vars on the agent process. Skips entries whose underlying GGUF
+     * file is missing on disk so a stripped Capacitor APK (no bundled
+     * models) doesn't pin a non-existent path.
+     *
+     * Idempotent — overwrites the env entries on every spawn so a future
+     * APK update that swaps the bundled GGUF gets picked up automatically.
+     * Preserves any explicit override the parent service env already
+     * carries (e.g. a developer setting `ELIZA_LOCAL_CHAT_MODEL_PATH` for
+     * a custom-loaded file outside the bundle).
+     */
+    private void applyBundledModelPaths(Map<String, String> agentEnv) {
+        File manifest = new File(
+            new File(agentStateDir(), "local-inference"),
+            "models/manifest.json"
+        );
+        if (!manifest.isFile()) return;
+        String json;
+        try (FileInputStream in = new FileInputStream(manifest)) {
+            ByteArrayOutputStream buf = new ByteArrayOutputStream();
+            byte[] chunk = new byte[4096];
+            int n;
+            while ((n = in.read(chunk)) >= 0) buf.write(chunk, 0, n);
+            json = buf.toString(StandardCharsets.UTF_8.name());
+        } catch (IOException error) {
+            Log.w(TAG, "Could not read bundled models manifest: " + error.getMessage());
+            return;
+        }
+        JSONArray models;
+        try {
+            models = new JSONObject(json).optJSONArray("models");
+        } catch (JSONException error) {
+            Log.w(TAG, "Bundled models manifest is malformed: " + error.getMessage());
+            return;
+        }
+        if (models == null) return;
+        File modelsDir = new File(
+            new File(agentStateDir(), "local-inference"),
+            "models"
+        );
+        for (int i = 0; i < models.length(); i += 1) {
+            JSONObject model = models.optJSONObject(i);
+            if (model == null) continue;
+            String role = model.optString("role", "").trim();
+            String ggufFile = model.optString("ggufFile", "").trim();
+            if (role.isEmpty() || ggufFile.isEmpty()) continue;
+            File gguf = new File(modelsDir, ggufFile);
+            if (!gguf.isFile()) continue;
+            String envKey;
+            if ("chat".equals(role)) {
+                envKey = "ELIZA_LOCAL_CHAT_MODEL_PATH";
+            } else if ("embedding".equals(role)) {
+                envKey = "ELIZA_LOCAL_EMBEDDING_MODEL_PATH";
+            } else {
+                continue;
+            }
+            // Don't clobber an explicit override carried from the parent
+            // service env — a developer who set the path manually wins.
+            if (System.getenv(envKey) != null) continue;
+            agentEnv.put(envKey, gguf.getAbsolutePath());
+            Log.i(
+                TAG,
+                "Bundled " + role + " model bound: " + envKey + "="
+                    + gguf.getAbsolutePath()
+            );
         }
     }
 
